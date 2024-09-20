@@ -11,16 +11,6 @@ def is_english(text):
     return bool(re.match(r"^[A-Za-z\s]*$", text))
 
 
-def parse_time(time_str):
-    if ":" in time_str:
-        minutes, seconds = time_str.split(":")
-        total_seconds = int(minutes) * 60 + float(seconds)
-    else:
-        total_seconds = float(time_str)
-
-    return datetime.timedelta(seconds=total_seconds)
-
-
 NAME_KEY = "Name"
 TIMESTAMP_KEY = "חותמת זמן"
 
@@ -45,15 +35,40 @@ def sanitize_name(raw_name: str) -> Tuple[str, bool]:
     if not is_english(stripped_string):
         return stripped_string, False
 
-    name = " ".join(word.capitalize() for word in stripped_string.split())
-    return name, True
+    name_tokens = [word.capitalize() for word in stripped_string.split()]
+    if len(name_tokens) < 2:
+        return stripped_string, False
+    return " ".join(name_tokens), True
 
 
 def is_time_duration(raw_time: str) -> bool:
     if raw_time == "":
         return True
-    pattern = r"^(?:\d{1,2}\.\d{2}|\d{1,2}:\d{2}\.\d{2})$"
-    return bool(re.match(pattern, raw_time))
+
+    try:
+        if "." in raw_time:
+            if ":" in raw_time:
+                # Format is minutes:seconds.milliseconds
+                minutes, seconds = raw_time.split(":")
+                seconds = seconds.split(".")[0]  # Get only the seconds part
+                milliseconds = seconds.split(".")[1] if "." in seconds else "00"
+            else:
+                # Format is minutes.seconds
+                minutes, milliseconds = raw_time.split(".")
+                seconds = "00"
+        else:
+            return False  # Must have either a dot or a colon
+
+        # Convert minutes and seconds to integers
+        minutes = int(minutes)
+        seconds = int(seconds)
+        milliseconds = int(milliseconds)
+
+        # Check if minutes are valid (0-59) and seconds are valid (0-59)
+        return 0 <= minutes < 60 and 0 <= seconds < 60 and 0 <= milliseconds < 100
+
+    except (ValueError, IndexError):
+        return False
 
 
 def is_multiblind_result(input_str: str) -> bool:
