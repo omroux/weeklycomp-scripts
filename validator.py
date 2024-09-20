@@ -1,5 +1,4 @@
 from typing import Dict, List, Tuple
-import datetime
 import csv
 import re
 from openpyxl import Workbook
@@ -21,15 +20,24 @@ def read_results(filename: str) -> List[Dict[str, str]]:
         return [row for row in reader]
 
 
-def sanitize_cell(cell: str, column: str) -> Tuple[str, bool]:
+def validate_cell(cell: str, column: str) -> Tuple[str, bool]:
+    """
+    Validate a cell based on its column, signifying its type (name, event etc)
+    """
     if column == NAME_KEY:
-        return sanitize_name(cell)
+        return validate_name(cell)
     if column == TIMESTAMP_KEY:
         return cell, True
-    return sanitize_time(column, cell)
+    return validate_time(column, cell)
 
 
-def sanitize_name(raw_name: str) -> Tuple[str, bool]:
+def validate_name(raw_name: str) -> Tuple[str, bool]:
+    """
+    Validate a competitor's name such that:
+        - The name is in english
+        - Every word's first letter is capitalized
+        - The name is at least 2 words long
+    """
     stripped_string = raw_name.strip()
 
     if not is_english(stripped_string):
@@ -42,29 +50,37 @@ def sanitize_name(raw_name: str) -> Tuple[str, bool]:
 
 
 def is_time_duration(raw_time: str) -> bool:
+    """
+    Validates if a given string represents a time duration in a specific format.
+
+    The function accepts a time duration in two main formats:
+        - "minutes:seconds.milliseconds"
+        - "minutes.seconds"
+
+    The following criteria must be met for the input to be considered valid:
+        - Minutes must be an integer between 0 and 59 (inclusive)
+        - Seconds must be an integer between 0 and 59 (inclusive)
+        - Milliseconds must be an integer between 0 and 99 (inclusive)
+    """
     if raw_time == "":
         return True
 
     try:
         if "." in raw_time:
             if ":" in raw_time:
-                # Format is minutes:seconds.milliseconds
                 minutes, seconds = raw_time.split(":")
                 seconds = seconds.split(".")[0]  # Get only the seconds part
                 milliseconds = seconds.split(".")[1] if "." in seconds else "00"
             else:
-                # Format is minutes.seconds
                 minutes, milliseconds = raw_time.split(".")
                 seconds = "00"
         else:
-            return False  # Must have either a dot or a colon
+            return False
 
-        # Convert minutes and seconds to integers
         minutes = int(minutes)
         seconds = int(seconds)
         milliseconds = int(milliseconds)
 
-        # Check if minutes are valid (0-59) and seconds are valid (0-59)
         return 0 <= minutes < 60 and 0 <= seconds < 60 and 0 <= milliseconds < 100
 
     except (ValueError, IndexError):
@@ -72,6 +88,18 @@ def is_time_duration(raw_time: str) -> bool:
 
 
 def is_multiblind_result(input_str: str) -> bool:
+    """
+    Validate that the given input string represents a multiblind result.
+
+    The function checks for this format:
+        <solved_cubes>/<attempted_cubes> <duration>
+    For example:
+        1/2 12:34.56
+
+    The duration is checked with the `is_time_duration` function.
+
+    The function also checks that solved_cubes is lesser or equal to the attempted cubes.
+    """
     pattern = r"^(\d+)/(\d+) (\S+)$"
 
     match = re.match(pattern, input_str)
@@ -89,10 +117,18 @@ def is_multiblind_result(input_str: str) -> bool:
 
 
 def is_fmc_result(input_str: str) -> bool:
+    """
+    Validate that the given input string represents an FMC result.
+
+    An FMC result is just a string of digits.
+    """
     return input_str.isdigit()
 
 
-def sanitize_time(event: str, raw_time: str) -> Tuple[str, bool]:
+def validate_time(event: str, raw_time: str) -> Tuple[str, bool]:
+    """
+    Function to validate times, based on the given event.
+    """
     stripped_string = raw_time.strip()
     if stripped_string == "":
         return "", True
@@ -105,52 +141,29 @@ def sanitize_time(event: str, raw_time: str) -> Tuple[str, bool]:
     return stripped_string, True
 
 
-def write_sanitized(data: List[Dict[str, str]], filename: str):
-    if not data:
-        print("the provided list is empty")
-        return
-    headers = data[0].keys()
-    with open(filename, mode="w", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=headers)
-        writer.writeheader()
-        writer.writerows(data)
-
-
 def main():
-    with open("./results.csv", newline="", encoding="utf-8-sig") as data:
-        reader = csv.DictReader(data)
-        rows = [row for row in reader]
+    rows = read_results("./results.csv")
 
-    # Create a new Excel workbook and select the active worksheet
     wb = Workbook()
     ws = wb.active
 
-    # Write the header
     headers = list(rows[0].keys())
     ws.append(headers)
 
-    # Define fill colors for different states
-    fill_not_ok = PatternFill(
+    error_fill_color = PatternFill(
         start_color="FF0000", end_color="FF0000", fill_type="solid"
-    )  # Red for not ok
+    )
 
-    for row in rows:
+    for idx, row in enumerate(rows, start=2):
         for column, cell in row.items():
-            sanitized, ok = sanitize_cell(cell, column)
-
-    # Write the data and apply colors based on ok status
-    for idx, row in enumerate(rows, start=2):  # start from row 2 since row 1 is header
-        for column, cell in row.items():
-            sanitized, ok = sanitize_cell(cell, column)
+            sanitized, ok = validate_cell(cell, column)
             cell_to_write = ws.cell(
                 row=idx, column=list(row.keys()).index(column) + 1, value=sanitized
             )
 
-            # Apply color based on ok variable
             if not ok:
-                cell_to_write.fill = fill_not_ok  # Apply red fill if not ok
+                cell_to_write.fill = error_fill_color
 
-    # Save the workbook
     wb.save("output.xlsx")
 
 
