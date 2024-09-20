@@ -1,8 +1,9 @@
-from typing import Dict, List
-from dataclasses import dataclass
+from typing import Dict, List, Tuple
 import datetime
 import csv
 import re
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
 
 
 def is_english(text):
@@ -24,72 +25,28 @@ NAME_KEY = "Name"
 TIMESTAMP_KEY = "חותמת זמן"
 
 
-@dataclass
-class EventResult:
-    event: str
-    result: datetime.timedelta
-
-
-@dataclass
-class CuberResults:
-    name: str
-    results: List[EventResult]
-
-
-def build_comp_results(data: List[Dict[str, str]]) -> List[CuberResults]:
-    return [build_cuber_results(row) for row in data]
-
-
-def build_cuber_results(row: Dict[str, str]) -> CuberResults:
-    name = row.pop(NAME_KEY)
-    time_stamp = row.pop(TIMESTAMP_KEY)
-    event_results = []
-    for event, time in row.items():
-        if time == "":
-            continue
-        if event == "Multiblind":
-            print("SKIPPING MULTIBLIND")
-            continue
-        if time == "DNF":
-            print("SKIPPING DNF")
-            continue
-        event_results.append(EventResult(event, parse_time(time)))
-    cuber_results = CuberResults(name=name, results=event_results)
-    return cuber_results
-
-
-def read_results() -> List[Dict[str, str]]:
-    with open("results.csv", newline="", encoding="utf-8-sig") as data:
+def read_results(filename: str) -> List[Dict[str, str]]:
+    with open(filename, newline="", encoding="utf-8-sig") as data:
         reader = csv.DictReader(data)
         return [row for row in reader]
 
 
-def sanitize_comp_results(results: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    return [sanitize_cuber_results(result) for result in results]
+def sanitize_cell(cell: str, column: str) -> Tuple[str, bool]:
+    if column == NAME_KEY:
+        return sanitize_name(cell)
+    if column == TIMESTAMP_KEY:
+        return cell, True
+    return sanitize_time(column, cell)
 
 
-def sanitize_cuber_results(result: Dict[str, str]) -> Dict[str, str]:
-    result[NAME_KEY] = sanitize_name(result[NAME_KEY])
-    events = {
-        key: value
-        for key, value in result.items()
-        if key not in [NAME_KEY, TIMESTAMP_KEY]
-    }
-    for event, time in events.items():
-        result[event] = sanitize_time(event, time)
-    return result
-
-
-def sanitize_name(raw_name: str) -> str:
+def sanitize_name(raw_name: str) -> Tuple[str, bool]:
     stripped_string = raw_name.strip()
 
     if not is_english(stripped_string):
-        print(f"error: name '{stripped_string}' is not in English.")
-        return f"ERROR: {stripped_string}"
-        # stripped_string = input("input the fixed name: ").strip()
+        return stripped_string, False
 
     name = " ".join(word.capitalize() for word in stripped_string.split())
-    return name
+    return name, True
 
 
 def is_time_duration(raw_time: str) -> bool:
@@ -116,19 +73,21 @@ def is_multiblind_result(input_str: str) -> bool:
     return is_time_duration(timestamp)
 
 
-def sanitize_time(event: str, raw_time: str) -> str:
+def is_fmc_result(input_str: str) -> bool:
+    return input_str.isdigit()
+
+
+def sanitize_time(event: str, raw_time: str) -> Tuple[str, bool]:
     stripped_string = raw_time.strip()
     if stripped_string == "":
-        return ""
+        return "", True
     if stripped_string.upper() == "DNF":
-        return "DNF"
-    event_result_validators = {"Multiblind": is_multiblind_result}
+        return "DNF", True
+    event_result_validators = {"Multiblind": is_multiblind_result, "FMC": is_fmc_result}
     result_parser = event_result_validators.get(event, is_time_duration)
     if not result_parser(stripped_string):
-        print(f"error: time '{stripped_string}' is not a result.")
-        return f"ERROR: {stripped_string}"
-        # stripped_string = input("input the fixed time: ").strip()
-    return stripped_string
+        return stripped_string, False
+    return stripped_string, True
 
 
 def write_sanitized(data: List[Dict[str, str]], filename: str):
@@ -143,21 +102,41 @@ def write_sanitized(data: List[Dict[str, str]], filename: str):
 
 
 def main():
-    raw_results = read_results()
-    sanitized = sanitize_comp_results(raw_results)
-    write_sanitized(sanitized, "results_sanitized.csv")
-    # pprint(sanitized)
+    with open("./results.csv", newline="", encoding="utf-8-sig") as data:
+        reader = csv.DictReader(data)
+        rows = [row for row in reader]
 
-    # results = build_comp_results(sanitized)
-    # pprint(results)
+    # Create a new Excel workbook and select the active worksheet
+    wb = Workbook()
+    ws = wb.active
 
-    # results = []
-    # for row in reader:
-    #     cuber_results = parse_cuber_results(row)
-    #     results.append(cuber_results)
-    #
-    # return results
-    # pprint(read_results())
+    # Write the header
+    headers = list(rows[0].keys())
+    ws.append(headers)
+
+    # Define fill colors for different states
+    fill_not_ok = PatternFill(
+        start_color="FF0000", end_color="FF0000", fill_type="solid"
+    )  # Red for not ok
+
+    for row in rows:
+        for column, cell in row.items():
+            sanitized, ok = sanitize_cell(cell, column)
+
+    # Write the data and apply colors based on ok status
+    for idx, row in enumerate(rows, start=2):  # start from row 2 since row 1 is header
+        for column, cell in row.items():
+            sanitized, ok = sanitize_cell(cell, column)
+            cell_to_write = ws.cell(
+                row=idx, column=list(row.keys()).index(column) + 1, value=sanitized
+            )
+
+            # Apply color based on ok variable
+            if not ok:
+                cell_to_write.fill = fill_not_ok  # Apply red fill if not ok
+
+    # Save the workbook
+    wb.save("output.xlsx")
 
 
 if __name__ == "__main__":
